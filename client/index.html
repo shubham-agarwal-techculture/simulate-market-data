@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-Time Market Stream | GOLDM26</title>
+    <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Outfit:wght@500;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0b0e11;
+            --card-bg: #161a1e;
+            --text-primary: #eaecef;
+            --text-secondary: #848e9c;
+            --accent-green: #00c087;
+            --accent-red: #f84960;
+            --border-color: #2b2f36;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        header {
+            padding: 1rem 2rem;
+            background-color: var(--card-bg);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        h1 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.5rem;
+            font-weight: 700;
+            background: linear-gradient(90deg, #f0b90b, #f3d42f);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: var(--accent-red);
+            box-shadow: 0 0 10px var(--accent-red);
+        }
+
+        .status-dot.online {
+            background-color: var(--accent-green);
+            box-shadow: 0 0 10px var(--accent-green);
+        }
+
+        main {
+            flex: 1;
+            display: grid;
+            grid-template-columns: 1fr 320px;
+            gap: 1px;
+            background-color: var(--border-color);
+            overflow: hidden;
+        }
+
+        #chart-container {
+            background-color: var(--bg-color);
+            position: relative;
+            width: 100%;
+            height: 100%;
+        }
+
+        #data-panel {
+            background-color: var(--card-bg);
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+            overflow-y: auto;
+        }
+
+        .data-group {
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 1rem;
+        }
+
+        .label {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 0.5rem;
+        }
+
+        .value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            font-family: 'Outfit', sans-serif;
+        }
+
+        #last-price.up { color: var(--accent-green); }
+        #last-price.down { color: var(--accent-red); }
+
+        pre {
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            background: rgba(0, 0, 0, 0.2);
+            padding: 1rem;
+            border-radius: 4px;
+            white-space: pre-wrap;
+            margin-top: auto;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>GOLDM26 MARKET DATA</h1>
+        <div class="status-badge">
+            <div id="status-dot" class="status-dot"></div>
+            <span id="status-text">Disconnected</span>
+        </div>
+    </header>
+
+    <main>
+        <div id="chart-container"></div>
+        <aside id="data-panel">
+            <div class="data-group">
+                <div class="label">Last Price</div>
+                <div id="last-price" class="value">---</div>
+            </div>
+            <div class="data-group">
+                <div class="label">High / Low</div>
+                <div id="high-low" class="value" style="font-size: 1rem;">--- / ---</div>
+            </div>
+            <div class="data-group">
+                <div class="label">Volume</div>
+                <div id="volume" class="value" style="font-size: 1.1rem;">---</div>
+            </div>
+            
+            <div class="label">Live Raw JSON</div>
+            <pre id="output">Waiting for stream...</pre>
+        </aside>
+    </main>
+
+    <script>
+        // --- Chart Initialization ---
+        const chartContainer = document.getElementById('chart-container');
+        
+        let chart;
+        let candleSeries;
+
+        function initChart() {
+            if (typeof LightweightCharts === 'undefined') {
+                console.error('LightweightCharts library not loaded');
+                return;
+            }
+
+            chart = LightweightCharts.createChart(chartContainer, {
+                width: chartContainer.clientWidth,
+                height: chartContainer.clientHeight || 500,
+                layout: {
+                    background: { color: '#0b0e11' },
+                    textColor: '#d1d4dc',
+                },
+                grid: {
+                    vertLines: { color: 'rgba(42, 46, 57, 0.5)' },
+                    horzLines: { color: 'rgba(42, 46, 57, 0.5)' },
+                },
+                crosshair: {
+                    mode: LightweightCharts.CrosshairMode.Normal,
+                },
+                rightPriceScale: {
+                    borderColor: 'rgba(197, 203, 206, 0.8)',
+                },
+                timeScale: {
+                    borderColor: 'rgba(197, 203, 206, 0.8)',
+                    timeVisible: true,
+                    secondsVisible: true,
+                },
+            });
+
+            if (chart.addCandlestickSeries) {
+                candleSeries = chart.addCandlestickSeries({
+                    upColor: '#00c087',
+                    downColor: '#f84960',
+                    borderVisible: false,
+                    wickUpColor: '#00c087',
+                    wickDownColor: '#f84960',
+                });
+            } else if (chart.addSeries) {
+                candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
+                    upColor: '#00c087',
+                    downColor: '#f84960',
+                    borderVisible: false,
+                    wickUpColor: '#00c087',
+                    wickDownColor: '#f84960',
+                });
+            } else {
+                console.error('Neither addCandlestickSeries nor addSeries found on chart object', chart);
+            }
+
+            // Handle Resize
+            window.addEventListener('resize', () => {
+                chart.applyOptions({
+                    width: chartContainer.clientWidth,
+                    height: chartContainer.clientHeight
+                });
+            });
+        }
+
+        // Initialize when ready
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initChart);
+        } else {
+            initChart();
+        }
+
+        // --- WebSocket Logic ---
+        const ws = new WebSocket("ws://localhost:8001/ws");
+        const statusDot = document.getElementById('status-dot');
+        const statusText = document.getElementById('status-text');
+        const output = document.getElementById('output');
+        const priceDisplay = document.getElementById('last-price');
+        const highLowDisplay = document.getElementById('high-low');
+        const volumeDisplay = document.getElementById('volume');
+
+        let lastPrice = 0;
+
+        ws.onopen = () => {
+            statusDot.classList.add('online');
+            statusText.textContent = 'Connected';
+        };
+
+        ws.onclose = () => {
+            statusDot.classList.remove('online');
+            statusText.textContent = 'Disconnected';
+        };
+
+        ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            
+            if (data.type === 'ohlcv') {
+                // Update Chart
+                if (candleSeries) {
+                    candleSeries.update({
+                        time: data.timestamp,
+                        open: data.open,
+                        high: data.high,
+                        low: data.low,
+                        close: data.close,
+                    });
+                }
+
+                // Update UI
+                output.textContent = JSON.stringify(data, null, 2);
+                
+                priceDisplay.textContent = data.close.toFixed(2);
+                priceDisplay.className = 'value ' + (data.close >= lastPrice ? 'up' : 'down');
+                
+                highLowDisplay.textContent = `${data.high.toFixed(2)} / ${data.low.toFixed(2)}`;
+                volumeDisplay.textContent = data.volume;
+
+                lastPrice = data.close;
+            }
+        };
+    </script>
+</body>
+</html>
