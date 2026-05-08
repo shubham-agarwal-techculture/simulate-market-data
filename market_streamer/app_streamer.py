@@ -2,6 +2,7 @@ import asyncio
 import json
 import random
 import time
+import httpx
 from datetime import datetime
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -19,6 +20,15 @@ async def lifespan(app: FastAPI):
     print("Market streamer background task stopped.")
 
 app = FastAPI(lifespan=lifespan)
+ 
+# =========================
+# Configuration
+# =========================
+CONFIG = {
+    # Replace this with your external webhook URL if needed
+    "ALERT_WEBHOOK_URL": "http://127.0.0.1:8001/webhook", 
+    "ALERT_INTERVAL": 5,
+}
 
 # =========================
 # Connected Clients
@@ -72,31 +82,43 @@ def generate_ohlcv():
 # =========================
 async def broadcast_market_data():
     print("Broadcast loop started")
-    while True:
-        try:
-            data = generate_ohlcv()
-            message = json.dumps(data)
+    count = 0
+    async with httpx.AsyncClient() as client_http:
+        while True:
+            try:
+                data = generate_ohlcv()
+                count += 1
 
-            disconnected = []
+                # Every Nth data point: Send Alert/Signal
+                if count % CONFIG["ALERT_INTERVAL"] == 0:
+                    print(f"--- ALERT: Sending Signal to {CONFIG['ALERT_WEBHOOK_URL']} (Count: {count}) ---")
+                    try:
+                        await client_http.post(CONFIG["ALERT_WEBHOOK_URL"], json=data)
+                    except Exception as e:
+                        print(f"Alert Failed: {e}")
 
-            for client in connected_clients:
-                try:
-                    await client.send_text(message)
-                except Exception:
-                    disconnected.append(client)
+                message = json.dumps(data)
 
-            # Remove dead connections
-            for client in disconnected:
-                connected_clients.remove(client)
+                disconnected = []
 
-            print(f"Broadcasted: {data}")
+                for client in connected_clients:
+                    try:
+                        await client.send_text(message)
+                    except Exception:
+                        disconnected.append(client)
 
-            # 1 candle every second
-            await asyncio.sleep(1)
+                # Remove dead connections
+                for client in disconnected:
+                    connected_clients.remove(client)
 
-        except Exception as e:
-            print("Broadcast Error:", e)
-            await asyncio.sleep(1)
+                print(f"Broadcasted: {data}")
+
+                # 1 candle every second
+                await asyncio.sleep(1)
+
+            except Exception as e:
+                print("Broadcast Error:", e)
+                await asyncio.sleep(1)
 
 # =========================
 # Startup Event
@@ -114,6 +136,7 @@ import os
 # =========================
 @app.get("/")
 def home():
+    print("DEBUG: Root (/) route hit")
     # Path to index.html in the client directory
     client_dir = os.path.join(os.path.dirname(__file__), "..", "client")
     index_path = os.path.join(client_dir, "index.html")
@@ -144,6 +167,31 @@ async def websocket_endpoint(websocket: WebSocket):
 
         if websocket in connected_clients:
             connected_clients.remove(websocket)
+
+# =========================
+# Webhook Endpoint (Alert Receiver)
+# =========================
+@app.get("/webhook")
+async def webhook_status():
+    """
+    Status check for the webhook endpoint.
+    """
+    print("DEBUG: Webhook GET route hit")
+    return {
+        "status": "online",
+        "message": "Webhook endpoint is active. Send a POST request to trigger an alert.",
+        "alert_interval": CONFIG["ALERT_INTERVAL"],
+        "target_url": CONFIG["ALERT_WEBHOOK_URL"]
+    }
+
+@app.post("/webhook")
+async def alert_webhook(data: dict):
+    """
+    Simple endpoint to receive and log alerts/signals.
+    """
+    print(f"DEBUG: Webhook POST hit with data: {data.get('symbol')}")
+    print(f"🔔 SIGNAL RECEIVED: {data.get('symbol')} at {data.get('close')}")
+    return {"status": "alert_processed", "timestamp": datetime.now().isoformat()}
 
 # =========================
 # Run Server
