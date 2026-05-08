@@ -1,3 +1,3 @@
 @echo off
-python app.py
+python app_streamer.py
 pause
